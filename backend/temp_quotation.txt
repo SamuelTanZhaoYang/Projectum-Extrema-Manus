@@ -1,0 +1,8 @@
+SERVICE QUOTATION
+                    ------------------------------------------
+                    Service Description: TOP UP/ REFILL R22GAS1.0 HP TO 3.0 HP (30PSI)
+                    Quantity: 1
+                    Unit Price (RM): 30.00
+                    Subtotal: 30.00
+                    Tax (8%): 2.40
+                    Total: 32.40
