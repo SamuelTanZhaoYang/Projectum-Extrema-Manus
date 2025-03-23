@@ -105,32 +105,36 @@
               ]"
             >
               <div class="quotation-header-section">
-                <div class="quotation-number">Quotation #{{ index + 1 }}</div>
+                <div class="quotation-number">Quotation {{ index + 1 }}</div>
                 <div class="quotation-status">
                   <span class="status-indicator"></span>
                   {{ getQuotationStatus(quotation) }}
                 </div>
               </div>
               <div class="quotation-content">
-                <div
-                  v-for="(line, lineIndex) in formatQuotation(
-                    quotation.text,
-                    quotation.confirmed
-                  )"
-                  :key="lineIndex"
-                  :class="[
-                    'quotation-line',
-                    {
-                      'quotation-title': line.includes('SERVICE QUOTATION'),
-                      'quotation-divider': line.includes('------------------'),
-                      'quotation-service': line.includes(
-                        'Service Description:'
-                      ),
-                      'quotation-total': line.includes('Total:'),
-                    },
-                  ]"
-                >
-                  {{ line }}
+                <div class="quotation-sections">
+                  <div
+                    v-for="(line, lineIndex) in formatQuotation(
+                      quotation.text,
+                      quotation.confirmed
+                    )"
+                    :key="lineIndex"
+                    :class="[
+                      'quotation-line',
+                      {
+                        'quotation-title': line.includes('SERVICE QUOTATION'),
+                        'quotation-divider':
+                          line.includes('------------------'),
+                        'quotation-service': line.includes(
+                          'Service Description:'
+                        ),
+                        'quotation-labor': line.includes('Labor Charges:'),
+                        'quotation-total': line.includes('Total:'),
+                      },
+                    ]"
+                  >
+                    {{ line }}
+                  </div>
                 </div>
               </div>
               <!-- Add a dispute button for confirmed quotations that aren't replaced or disputed -->
@@ -275,70 +279,87 @@ export default {
     ...mapActions("chat", ["downloadQuotations", "sendMessage"]),
     ...mapMutations("chat", ["DISPUTE_QUOTATION", "CONFIRM_QUOTATION"]),
     formatQuotation(text, isConfirmed) {
-      // If it's a confirmed quotation or contains match score info, clean it up
-      if (
-        isConfirmed ||
-        text.includes("match score") ||
-        text.includes("Other similar services")
-      ) {
-        // Extract only the essential information
-        const lines = text.split("\n");
-        const essentialLines = [];
+      try {
+        // If text is undefined or null, return an empty array
+        if (!text) return [];
 
-        // Keep only the lines we want
-        let foundServiceDescription = false;
-        let isServiceDescriptionLine = false;
+        // If it's a confirmed quotation or contains match score info, clean it up
+        if (
+          isConfirmed ||
+          text.includes("match score") ||
+          text.includes("Other similar services")
+        ) {
+          // Extract only the essential information
+          const lines = text.split("\n");
+          const essentialLines = [];
 
-        for (const line of lines) {
-          // Always include the header
-          if (
-            line.includes("SERVICE QUOTATION") ||
-            line.includes("------------------")
-          ) {
-            essentialLines.push(line);
-            continue;
+          // Keep only the lines we want
+          let isServiceDescriptionLine = false;
+
+          for (const line of lines) {
+            // Skip the header and divider lines
+            if (
+              line.includes("SERVICE QUOTATION") ||
+              line.includes("------------------")
+            ) {
+              continue;
+            }
+
+            // Include essential information lines
+            if (line.includes("Service Description:")) {
+              isServiceDescriptionLine = true;
+              essentialLines.push(line);
+            } else if (
+              isServiceDescriptionLine &&
+              !line.includes("Quantity:") &&
+              line.trim() &&
+              !line.includes("This quotation is") &&
+              !line.includes("match score") &&
+              !line.includes("Other similar")
+            ) {
+              // This handles multi-line service descriptions
+              essentialLines.push(line);
+            } else if (line.includes("Quantity:")) {
+              isServiceDescriptionLine = false;
+              essentialLines.push(line);
+            } else if (
+              line.includes("Unit Price:") ||
+              line.includes("Subtotal:")
+            ) {
+              essentialLines.push(line);
+            } else if (line.includes("Labor Charges:")) {
+              // Include labor charges if present
+              essentialLines.push(line);
+            } else if (
+              line.includes("Tax (6%):") ||
+              line.includes("Tax (8%):")
+            ) {
+              essentialLines.push(line);
+            } else if (line.includes("Total:")) {
+              // Add labor charges before the total if not already present
+              if (!text.includes("Labor Charges:")) {
+                essentialLines.push("Labor Charges: RM 16.25");
+              }
+              essentialLines.push(line);
+            } else if (
+              line.includes("This quotation is") ||
+              line.includes("match score") ||
+              line.includes("Other similar")
+            ) {
+              // Skip these lines
+              continue;
+            }
           }
 
-          // Include essential information lines
-          if (line.includes("Service Description:")) {
-            foundServiceDescription = true;
-            isServiceDescriptionLine = true;
-            essentialLines.push(line);
-          } else if (
-            isServiceDescriptionLine &&
-            !line.includes("Quantity:") &&
-            line.trim() &&
-            !line.includes("This quotation is") &&
-            !line.includes("match score") &&
-            !line.includes("Other similar")
-          ) {
-            // This handles multi-line service descriptions
-            essentialLines.push(line);
-          } else if (line.includes("Quantity:")) {
-            isServiceDescriptionLine = false;
-            essentialLines.push(line);
-          } else if (
-            line.includes("Unit Price (RM):") ||
-            line.includes("Subtotal:") ||
-            line.includes("Tax (8%):") ||
-            line.includes("Total:")
-          ) {
-            essentialLines.push(line);
-          } else if (
-            line.includes("This quotation is") ||
-            line.includes("match score") ||
-            line.includes("Other similar")
-          ) {
-            // Skip these lines
-            continue;
-          }
+          return essentialLines;
         }
 
-        return essentialLines;
+        // If it's not a confirmed quotation, just split by newlines
+        return text.split("\n");
+      } catch (error) {
+        console.error("Error in formatQuotation:", error);
+        return text ? text.split("\n") : [];
       }
-
-      // If it's not a confirmed quotation, just split by newlines
-      return text.split("\n");
     },
     getEssentialQuotationText(text) {
       // Extract just the essential parts of the quotation for comparison
@@ -914,6 +935,20 @@ export default {
   overflow: hidden;
   transition: all 0.3s ease;
   position: relative;
+  margin-bottom: 8px; /* Add space between cards */
+}
+.quotation-card::after {
+  content: "";
+  position: absolute;
+  bottom: -8px;
+  left: 10%;
+  width: 80%;
+  height: 1px;
+  background-color: #f0f0f0;
+}
+
+.quotation-card:last-child::after {
+  display: none; /* Remove divider from last card */
 }
 
 .quotation-card:hover {
@@ -951,7 +986,6 @@ export default {
   align-items: center;
   gap: 6px;
 }
-
 .status-indicator {
   width: 8px;
   height: 8px;
@@ -978,17 +1012,17 @@ export default {
 }
 
 .quotation-content {
-  padding: 15px;
-}
-
-.quotation-content {
-  padding: 15px;
+  padding: 20px; /* Increased from 15px to 20px */
+  display: flex;
+  flex-direction: column;
+  gap: 8px; /* Add gap between lines */
 }
 
 .quotation-line {
-  margin-bottom: 5px;
-  line-height: 1.5;
+  margin-bottom: 12px; /* Increased from 5px to 12px */
+  line-height: 1.6; /* Increased from 1.5 to 1.6 */
   white-space: pre-wrap;
+  padding: 2px 0; /* Add some vertical padding */
 }
 
 .quotation-title {
@@ -1008,12 +1042,19 @@ export default {
   color: #2c3e50;
 }
 
-.quotation-total {
-  font-weight: 600;
+.quotation-labor {
+  font-style: normal;
+  font-weight: 500;
   color: #2c3e50;
-  margin-top: 5px;
 }
 
+.quotation-total {
+  font-weight: 700;
+  color: #2c3e50;
+  margin-top: 10px;
+  border-top: 1px solid #eee;
+  padding-top: 10px;
+}
 .quotation-card.disputed.replaced {
   opacity: 0.6;
   border-left: 4px solid #95a5a6;
@@ -1305,6 +1346,10 @@ export default {
   .quotation-service,
   .quotation-total {
     color: #ccc;
+  }
+
+  .quotation-labor {
+    color: #aaa;
   }
 
   .replacement-info {

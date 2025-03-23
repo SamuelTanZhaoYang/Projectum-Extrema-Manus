@@ -633,17 +633,25 @@ def generate_quotation(service: Dict, quantity: int = 1) -> str:
     description = service['description']
     unit_price = service['unit_price']
     subtotal = unit_price * quantity
-    tax = subtotal * 0.08
-    total = subtotal + tax
     
-    # Create a clean quotation format with just the essential information
+    # Add labor charges
+    labor_charges = 16.25
+    
+    # Calculate tax on subtotal + labor charges
+    tax = (subtotal + labor_charges) * 0.06
+    
+    # Calculate total
+    total = subtotal + labor_charges + tax
+    
+    # Create a clean quotation format with the essential information including labor charges
     quotation = f"""SERVICE QUOTATION
                     ------------------------------------------
                     Service Description: {description}
                     Quantity: {quantity}
-                    Unit Price (RM): {unit_price:.2f}
+                    Unit Price: {unit_price:.2f}
                     Subtotal: {subtotal:.2f}
-                    Tax (8%): {tax:.2f}
+                    Labor Charges: {labor_charges:.2f}
+                    Tax (6%): {tax:.2f}
                     Total: {total:.2f}"""
     
     return quotation

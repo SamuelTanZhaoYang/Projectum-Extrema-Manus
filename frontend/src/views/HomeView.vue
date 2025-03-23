@@ -1,10 +1,10 @@
 <template>
   <div class="home">
-    <div class="chat-panel">
-      <ChatInterface />
-    </div>
     <div class="quotation-panel">
       <QuotationCanvas />
+    </div>
+    <div class="chat-panel">
+      <ChatInterface />
     </div>
   </div>
 </template>

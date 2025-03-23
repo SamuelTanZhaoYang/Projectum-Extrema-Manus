@@ -102,6 +102,7 @@ def parse_quotation_text(quotation_text: str) -> Dict:
     quantity = 1
     unit_price = 0.0
     subtotal = 0.0
+    labor_charges = 16.25  # Default labor charges
     tax = 0.0
     total = 0.0
     
@@ -114,7 +115,7 @@ def parse_quotation_text(quotation_text: str) -> Dict:
         if "Service Description:" in line:
             service_desc_started = True
             service_desc_lines.append(line.split("Service Description:")[1].strip())
-        elif service_desc_started and not any(key in line for key in ["Quantity:", "Unit Price (RM):", "Subtotal:", "Tax (8%):", "Total:"]):
+        elif service_desc_started and not any(key in line for key in ["Quantity:", "Unit Price:", "Subtotal:", "Labor Charges:", "Tax (6%):", "Total:"]):
             # This is a continuation of the service description
             service_desc_lines.append(line)
         elif "Quantity:" in line:
@@ -123,9 +124,9 @@ def parse_quotation_text(quotation_text: str) -> Dict:
                 quantity = int(line.split("Quantity:")[1].strip())
             except ValueError:
                 pass
-        elif "Unit Price (RM):" in line:
+        elif "Unit Price:" in line:
             try:
-                unit_price = float(line.split("Unit Price (RM):")[1].strip())
+                unit_price = float(line.split("Unit Price:")[1].strip())
             except ValueError:
                 pass
         elif "Subtotal:" in line:
@@ -133,10 +134,16 @@ def parse_quotation_text(quotation_text: str) -> Dict:
                 subtotal = float(line.split("Subtotal:")[1].strip())
             except ValueError:
                 pass
-        elif "Tax (8%):" in line:
+        elif "Labor Charges:" in line:
             try:
-                tax = float(line.split("Tax (8%):")[1].strip())
+                labor_charges = float(line.split("Labor Charges:")[1].strip())
             except ValueError:
+                pass
+        elif "Tax (6%):" in line :  # Handle both tax formats
+            try:
+                tax_part = line.split("Tax (")[1]
+                tax = float(tax_part.split("):")[1].strip())
+            except (ValueError, IndexError):
                 pass
         elif "Total:" in line:
             try:
@@ -152,16 +159,17 @@ def parse_quotation_text(quotation_text: str) -> Dict:
         subtotal = unit_price * quantity
     
     if tax == 0.0 and subtotal > 0:
-        tax = subtotal * 0.08  # Assuming 8% tax
+        tax = (subtotal + labor_charges) * 0.06  # Assuming 6% tax
     
     if total == 0.0 and subtotal > 0 and tax > 0:
-        total = subtotal + tax
+        total = subtotal + labor_charges + tax
     
     return {
         'service_description': service_description,
         'quantity': quantity,
         'unit_price': unit_price,
         'subtotal': subtotal,
+        'labor_charges': labor_charges,
         'tax': tax,
         'total': total
     }
@@ -278,7 +286,7 @@ async def download_quotations(
                 text_content += f"------------------------------------------\n"
                 text_content += f"Service Description: {quotation['service_description']}\n"
                 text_content += f"Quantity: {quotation['quantity']}\n"
-                text_content += f"Unit Price (RM): {quotation['unit_price']:.2f}\n"
+                text_content += f"Unit Price: {quotation['unit_price']:.2f}\n"
                 text_content += f"Subtotal: {quotation['subtotal']:.2f}\n"
                 text_content += f"Tax (8%): {quotation['tax']:.2f}\n"
                 text_content += f"Total: {quotation['total']:.2f}\n"
@@ -405,7 +413,7 @@ async def download_quotations(
         
         # Create a single table for all quotations
         # First, create the header row
-        table_data = [["Item", "Service Description", "Quantity", "Unit Price (RM)", "Subtotal", "Tax (8%)", "Total"]]
+        table_data = [["No","Service Description", "Quantity", "Unit Price (RM)", "Subtotal", "Labor Charges", "Tax (6%)", "Total"]]
         
         # Add each quotation as a row in the table
         for i, quotation in enumerate(quotation_data):
@@ -414,15 +422,16 @@ async def download_quotations(
             
             # Add the row to the table (using i+1 instead of f"#{i+1}")
             table_data.append([
-                str(i+1),  # Just the number without the # symbol
-                service_desc_para,
-                str(quotation['quantity']),
-                f"{quotation['unit_price']:.2f}",
-                f"{quotation['subtotal']:.2f}",
-                f"{quotation['tax']:.2f}",
-                f"{quotation['total']:.2f}"
-            ])
-        
+                    str(i+1), 
+                    service_desc_para,
+                    str(quotation['quantity']),
+                    f"{quotation['unit_price']:.2f}",
+                    f"{quotation['subtotal']:.2f}",
+                    f"{quotation['labor_charges']:.2f}",
+                    f"{quotation['tax']:.2f}",
+                    f"{quotation['total']:.2f}"
+    ]) 
+       
         # Calculate column widths
         available_width = doc.width - doc.leftMargin - doc.rightMargin
         col_widths = [
@@ -431,6 +440,7 @@ async def download_quotations(
             available_width * 0.12,  # Quantity 
             available_width * 0.18,  # Unit Price 
             available_width * 0.12,  # Subtotal 
+            available_width * 0.18,  # Labor Charges
             available_width * 0.11,  # Tax 
             available_width * 0.12   # Total 
         ]
