@@ -4,12 +4,6 @@ An innovative AI-powered chatbot that dynamically generates service quotations f
 
 ---
 
-## Chatbot Demo
-
-*Insert demo link or screenshot here (if available)*
-
----
-
 ## Table of Contents
 
 - [Overview](#overview)
@@ -68,7 +62,7 @@ The Quotation Generating Chatbot is designed to streamline the process of creati
 ---
 
 ## Project Structure
-
+```
 quotation-chatbot/
 ├── backend/
 │   ├── __pycache__/
@@ -98,7 +92,7 @@ quotation-chatbot/
 ├── .gitignore
 ├── README.md                  # This README file
 └── ...
-
+```
 ---
 
 ## Installation & Setup
@@ -112,111 +106,100 @@ quotation-chatbot/
 
 ### Backend Setup
 
-1. **Clone the repository:**
+1. Clone the repository:
 
    ```bash
    git clone https://github.com/yourusername/quotation-chatbot.git
    cd quotation-chatbot
-Create and activate a virtual environment:
+   ```
+2. Create and activate a virtual environment:
 
-bash
-Copy
-Edit
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-Install Python dependencies:
+    ```bash
+    python -m venv venv
+    source venv/bin/activate  # On Windows: venv\Scripts\activate
+    ```
 
-bash
-Copy
-Edit
-cd backend
-pip install -r requirements.txt
-Configure environment variables:
+3. Install Python dependencies:
+    ```bash
+    cd backend
+    pip install -r requirements.txt
+    ```
 
-Create a .env file in the backend directory with:
+4. Create a .env file in the backend directory with:
 
-env
-Copy
-Edit
-GEMINI_API_KEY=your_gemini_api_key_here
-DATABASE_URL=postgresql://username:password@localhost:5432/quotation_db
-Run the FastAPI server:
+    ```env
+    GEMINI_API_KEY=your_gemini_api_key_here
+    DATABASE_URL=postgresql://username:password@localhost:5432/quotation_db
+    ```
 
-bash
-Copy
-Edit
-uvicorn main:app --reload
-The API will be available at http://127.0.0.1:8000.
+5. Run the FastAPI server:
 
-Frontend Setup
-Navigate to the frontend directory:
+    ```bash
+    uvicorn main:app --reload
+    ```
 
-bash
-Copy
-Edit
-cd ../frontend
-Install Node dependencies:
+    The API will be available at `http://127.0.0.1:8000`
 
-bash
-Copy
-Edit
-npm install
-# or
-yarn install
-Configure environment variables:
+### Frontend Setup
+1. Navigate to the frontend directory:
 
-Create a .env file in the frontend directory with:
+    ```bash
+    cd ../frontend
+    ```
+2. Install Node dependencies:
+    ```bash
+    npm install
+    # or
+    yarn install
+    ```
 
-env
-Copy
-Edit
-VITE_API_URL=http://localhost:8000/api
-Run the development server:
+3. Configure environment variables:
 
-bash
-Copy
-Edit
-npm run dev
-# or
-yarn dev
-The frontend will be available at http://localhost:3000.
+   Create a `.env` file in the frontend directory with:
 
-Docker Setup (Optional)
+    ```env
+    VITE_API_URL=http://localhost:8000/api
+    ```
+
+5. Run the development server:
+    ```bash
+    npm run dev
+    # or
+    yarn dev
+    ```
+    The frontend will be available at `http://localhost:3000`
+
+### Docker Setup (Optional)
 For containerized deployment:
-
+```bash
 docker-compose up -d
-Usage
-Basic Workflow
-Start a conversation by asking about a service (e.g., "I need aircon servicing").
+```
 
-Answer follow-up questions about specifics (unit type, horsepower, quantity, etc.).
+## Usage
+### Basic Workflow
+1. Start a conversation by asking about a service (e.g., "I need aircon servicing").
 
-Review the generated quotation with pricing details.
+2. Answer follow-up questions about specifics (unit type, horsepower, quantity, etc.).
 
-Confirm or modify the quotation as needed.
+3. Review the generated quotation with pricing details.
 
-Download the final quotation as a PDF.
+4. Confirm or modify the quotation as needed.
 
-Example Conversations
-Aircon Servicing Scenario:
-User: "How much for aircon servicing?"
+5. Download the final quotation as a PDF.
 
-Bot: "For Aircon Servicing, prices typically range from RM 0.00 to RM 2690.00, with an average cost of RM 207.47.
+## Example Conversations
+### Aircon Servicing Scenario
 
-Our most popular Aircon Servicing services include:
-BASIC AIR COND SERVICING (CEILING EXPOSED TYPE) - 3.0HP TO 5.0HP (RM 42.50),
-TO PERFORM CHEMICAL WASH & CLEAN FOR OUTDOOR ONLY (3-5HP) (RM 127.50),
-CHEMICAL AIR COND SERVICING (CASSETTE TYPE UNIT) - 4.0HP TO 5.0HP (RM 340.00)
+**User**: "How much for aircon servicing?"
 
+**Bot**: "For Aircon Servicing, prices typically range from RM 0.00 to RM 2690.00, with an average cost of RM 207.47...
 Would you like me to provide a specific quotation based on your requirements?"
 
-User: "Yes, chemical cleaning for a window unit, 3.0 HP, just 1 unit."
+**User**: "Yes, chemical cleaning for a window unit, 3.0 HP, just 1 unit."
 
 Bot:
 
-plaintext
-Copy
-Edit
+```plaintext
 SERVICE QUOTATION
 ------------------------------------------
 Service Description: CHEMICAL AIR COND SERVICING (CEILING EXPOSED TYPE) - 3.0HP TO 5.0HP
@@ -226,22 +209,21 @@ Subtotal: 340.00
 Labor Charges: 16.25
 Tax (6%): 21.38
 Total: 377.62
+```
 
 This quotation is for CHEMICAL AIR COND SERVICING (CEILING EXPOSED TYPE) - 3.0HP TO 5.0HP with a match score of 66%.
 If you would like to proceed with this quotation, please confirm by saying 'Yes' or 'Confirm'.
 
-Plumbing Scenario:
-User: "I have a leaking toilet"
+## Plumbing Scenario
+**User**: "I have a leaking toilet"
 
-Bot: "How many toilets need service?"
+**Bot**: "How many toilets need service?"
 
-User: "Just one"
+**User**: "Just one"
 
-Bot:
+**Bot**:
+```plaintext
 
-plaintext
-Copy
-Edit
 SERVICE QUOTATION
 ------------------------------------------
 Service Description: REPAIR TOILET LEAKING
@@ -251,58 +233,32 @@ Subtotal: 120.00
 Labor Charges: 16.25
 Tax (6%): 8.18
 Total: 144.43
+````
 
 This quotation is for REPAIR TOILET LEAKING with a match score of 85%.
 If you would like to proceed with this quotation, please confirm by saying 'Yes' or 'Confirm'.
 
-How It Works
-Core Components
-Entity Extraction: Uses Google's Gemini LLM to extract relevant entities from user messages (e.g., service type, unit type, horsepower, etc.).
+## How It Works
+### Core Components
+- **Entity Extraction**: via Gemini LLM
+- **Data Analysis**: via `analyze_data()`
+- **Fuzzy Matching**: via `find_matching_services()`
+- **State Machine**: manages conversational stages
+- **Quotation Generator**: computes totals, taxes, labor, etc.
 
-Data Analysis: The analyze_data() function processes the quotation database to extract:
+### Technical Implementation
+- **LLM Integration**: Uses the Langchain framework to interact with Google's Gemini LLM.
+- **Fuzzy Matching**: Employs the FuzzyWuzzy library for string matching with tolerance for typos and variations.
+- **Data Caching**: Implements efficient caching to minimize database calls.
+- **PDF Generation**: Uses ReportLab to create professional PDF quotations.
+- **State Management**: Maintains conversation context through a state machine architecture.
 
-Service categories
-
-Price statistics (min, max, median, mean)
-
-Popular services by category
-
-Fuzzy Matching: The find_matching_services() function uses fuzzy matching to find the most relevant services based on extracted entities.
-
-State Machine: Manages conversation flow through different states:
-
-INITIAL
-
-GATHERING_INFO
-
-QUOTATION_PRESENTED
-
-QUOTATION_CONFIRMED
-
-ASKING_FOR_ANOTHER
-
-DISPUTE_HANDLING
-
-ENDING
-
-Quotation Generation: Generates a detailed quotation with pricing, labor charges, and taxes once sufficient information is gathered.
-
-Technical Implementation
-LLM Integration: Uses the Langchain framework to interact with Google's Gemini LLM.
-
-Fuzzy Matching: Employs the FuzzyWuzzy library for string matching with tolerance for typos and variations.
-
-Data Caching: Implements efficient caching to minimize database calls.
-
-PDF Generation: Uses ReportLab to create professional PDF quotations.
-
-State Management: Maintains conversation context through a state machine architecture.
-
-Advanced Features
-Price Range Analysis
+## Advanced Features
+### Price Range Analysis
 The system can provide detailed price statistics for different service categories and types.
 
 Example code snippet:
+```python
 def get_price_estimate(category, service_type=None):
     """Get a price estimate for a category and optional service type based on analyzed data"""
     analysis = analyze_data()
@@ -310,11 +266,13 @@ def get_price_estimate(category, service_type=None):
         stats = analysis['category_analysis'][category]['price_range']
         return f"For {category}, prices typically range from RM {stats['min']:.2f} to RM {stats['max']:.2f}, with an average cost of RM {stats['mean']:.2f}."
     return "Sorry, we don't have pricing data for that service."
-Popular Service Recommendations
+```
+
+### Popular Service Recommendations
 Analyzes historical data to recommend popular services.
 
 Example code snippet:
-
+```python
 def get_popular_services(category, service_type=None):
     """Get popular services for a category and optional service type based on analyzed data"""
     analysis = analyze_data()
@@ -324,10 +282,12 @@ def get_popular_services(category, service_type=None):
             services_text = ", ".join([f"{s['description']} (RM {s['unit_price']:.2f})" for s in common_services])
             return f"Our most popular {category} services include: {services_text}"
     return None
-Performance Optimization
-Data Caching
-Implements caching to reduce repeated database calls:
+```
 
+## Performance Optimization
+### Data Caching
+Implements caching to reduce repeated database calls:
+```python
 _df_cache = None
 _data_analysis_cache = None
 
@@ -338,64 +298,43 @@ def get_quotation_data():
         # Load data from database
         _df_cache = get_quotation_data_as_df()
     return _df_cache
-LLM Optimization
-Direct Response Handling: Common responses are handled without LLM calls.
+```
+### LLM Optimization
+- **Direct Response Handling**: Common responses are handled without LLM calls.
+- **Context Preservation**: Maintains conversation context to avoid redundant entity extraction.
+- **Fallback Mechanisms**: Uses simple pattern matching as a fallback when LLM calls fail.
 
-Context Preservation: Maintains conversation context to avoid redundant entity extraction.
+## Known Limitations
+- **Service Matching Accuracy**: The fuzzy matching algorithm may not always find the most appropriate service, especially with ambiguous descriptions.
+- **LLM Dependency**: Requires a valid Gemini API key and may be affected by API rate limits or downtime.
+- **Limited Service Categories**: Currently optimized for aircon and plumbing services; adding new service categories requires code adjustments.
+- **Data Freshness**: Relies on cached data that must be manually refreshed for real-time updates.
 
-Fallback Mechanisms: Uses simple pattern matching as a fallback when LLM calls fail.
+## Future Enhancements
+- **Multi-language Support**: Add support for additional languages beyond English.
+- **Voice Interface**: Integrate speech-to-text and text-to-speech capabilities.
+- **Customer Authentication**: Add user accounts and authentication for personalized experiences.
+- **Service Provider Integration**: Allow service providers to update their offerings in real-time.
+- **Appointment Scheduling**: Integrate with calendar systems for service appointment booking.
+- **Payment Processing**: Add payment gateway integration for immediate service booking.
 
-Known Limitations
-Service Matching Accuracy: The fuzzy matching algorithm may not always find the most appropriate service, especially with ambiguous descriptions.
-
-LLM Dependency: Requires a valid Gemini API key and may be affected by API rate limits or downtime.
-
-Limited Service Categories: Currently optimized for aircon and plumbing services; adding new service categories requires code adjustments.
-
-Data Freshness: Relies on cached data that must be manually refreshed for real-time updates.
-
-Future Enhancements
-Multi-language Support: Add support for additional languages beyond English.
-
-Voice Interface: Integrate speech-to-text and text-to-speech capabilities.
-
-Customer Authentication: Add user accounts and authentication for personalized experiences.
-
-Service Provider Integration: Allow service providers to update their offerings in real-time.
-
-Appointment Scheduling: Integrate with calendar systems for service appointment booking.
-
-Payment Processing: Add payment gateway integration for immediate service booking.
-
-Contributing
+## Contributing
 Contributions are welcome! Please follow these steps:
+```bash
+# Fork & clone
+git checkout -b feature/your-feature
+git commit -m "Add your feature"
+git push origin feature/your-feature
+# Submit Pull Request
+```
 
-Fork the repository.
-
-Create your feature branch:
-
-git checkout -b feature/amazing-feature
-Commit your changes:
-
-
-git commit -m 'Add some amazing feature'
-Push to the branch:
-
-
-git push origin feature/amazing-feature
-Open a Pull Request.
-
-License
+## License
 This project is licensed under the MIT License - see the LICENSE file for details.
 
-Acknowledgements
-Google Gemini for providing the LLM capabilities.
-
-FastAPI for the efficient API framework.
-
-Vue.js for the reactive frontend framework.
-
-Langchain for LLM integration tools.
-
-FuzzyWuzzy for fuzzy string matching.
+## Acknowledgements
+- **Google Gemini** for providing the LLM capabilities.
+- **FastAPI** for the efficient API framework.
+- **Vue.js** for the reactive frontend framework.
+- **Langchain** for LLM integration tools.
+- **FuzzyWuzzy** for fuzzy string matching.
 
