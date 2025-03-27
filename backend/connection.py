@@ -87,47 +87,4 @@ def get_quotation_data_as_df():
 
         return None
 
-# def get_quotation_data_as_string():
-#     """
-#     Retrieves quotation data from Cloud SQL and returns it as a formatted string.
-#
-#     Returns:
-#         str: Formatted string containing quotation data
-#         or error message if an error occurs
-#     """
-#     try:
-#         df = get_quotation_data_as_df()
-#         if df is not None and not df.empty:
-#             return df.to_string()
-#         else:
-#             return "No quotation data available"
-#     except Exception as e:
-#         return f"Error retrieving quotation data: {e}"
-#
-# # Test connection and data retrieval
-# try:
-#     pool = connect_with_connector()
-#     # insert statement
-#     insert_stmt = sqlalchemy.text(
-#         "SELECT * FROM quotation_data",
-#     )
-#
-#     with pool.connect() as db_conn:
-#
-#         # query database
-#         result = db_conn.execute(sqlalchemy.text("SELECT * FROM quotation_data")).fetchall()
-#
-#         # commit transaction (SQLAlchemy v2.X.X is commit as you go)
-#         db_conn.commit()
-#
-#         # Do something with the results
-#         for row in result:
-#             print(row)
-# except Exception as e:
-#     print(f"An error occurred: {e}")
-
-# Example of how to use the functions:
-# df = get_quotation_data_as_df()
-# if df is not None:
-#     print(f"Retrieved {len(df)} rows of quotation data")
-#     print(df.head())
+print(os.environ.get("DB_USER"))

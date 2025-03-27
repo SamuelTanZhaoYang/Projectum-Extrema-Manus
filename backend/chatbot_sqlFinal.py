@@ -36,6 +36,7 @@ _df_cache = None
 _data_analysis_cache = None
 _conversation_context = {}  # Store conversation context by session ID
 _entity_extraction_llm = None 
+_search_llm = None  # New LLM for search matching
 
 class ConversationState:
     INITIAL = "initial"
@@ -45,6 +46,7 @@ class ConversationState:
     ASKING_FOR_ANOTHER = "asking_for_another"
     DISPUTE_HANDLING = "dispute_handling"
     ENDING = "ending"
+
 # Sample data for testing - replace this with your actual data loading function
 from connection import get_quotation_data_as_df
 def get_quotation_data():
@@ -92,6 +94,22 @@ def get_entity_extraction_llm():
             logger.error(f"Error initializing entity extraction LLM: {e}")
             raise ValueError("Failed to initialize entity extraction LLM")
     return _entity_extraction_llm
+
+def get_search_llm():
+    """Get or initialize the LLM for search matching"""
+    global _search_llm
+    if _search_llm is None:
+        try:
+            _search_llm = ChatGoogleGenerativeAI(
+                model="gemini-2.0-pro", 
+                api_key=GEMINI_API_KEY,
+                temperature=0.2  # Slightly higher temperature for more creative matching
+            )
+            logger.info("Initialized search matching LLM")
+        except Exception as e:
+            logger.error(f"Error initializing search matching LLM: {e}")
+            raise ValueError("Failed to initialize search matching LLM")
+    return _search_llm
 
 def analyze_data():
     """Analyze the data to extract useful information for quotations"""
@@ -158,6 +176,7 @@ def analyze_data():
             raise ValueError("Failed to analyze data")
     
     return _data_analysis_cache
+
 def extract_entities_with_llm(message: str, context: Dict = None) -> Dict:
     """Extract entities from a message using the LLM"""
     try:
@@ -305,7 +324,6 @@ Return ONLY a JSON object with the extracted entities. If an entity is not prese
     except Exception as e:
         logger.error(f"Error extracting entities with LLM: {e}")
         return {}
-    
 def determine_missing_info_with_llm(info: Dict) -> Dict:
     """Use the LLM to determine what information is missing and generate a question to ask the user"""
     try:
@@ -497,9 +515,156 @@ Return your response as a JSON object with:
             'missing_key': None,
             'next_question': "Could you provide more details about your service request?"
         }
+
+def find_matching_services_with_llm(info: Dict) -> List[Dict]:
+    """Find services that match the given information using LLM"""
+    try:
+        # Get data and LLM
+        df = get_quotation_data()
+        llm = get_search_llm()
+        
+        # Extract key information
+        category = info.get('category')
+        if not category:
+            return []
+        
+        # Filter by category to reduce the number of services to compare
+        category_df = df[df['category'] == category]
+        if category_df.empty:
+            return []
+        
+        # Create a description of what the user is looking for
+        user_requirements = []
+        if info.get('unit_type'):
+            user_requirements.append(f"Unit type: {info['unit_type']}")
+        if info.get('service_type'):
+            user_requirements.append(f"Service type: {info['service_type']}")
+        if info.get('hp_size'):
+            user_requirements.append(f"HP size: {info['hp_size']}")
+        if info.get('brand'):
+            user_requirements.append(f"Brand: {info['brand']}")
+        if info.get('fixture_type'):
+            user_requirements.append(f"Fixture type: {info['fixture_type']}")
+        if info.get('issue_type'):
+            user_requirements.append(f"Issue type: {info['issue_type']}")
+            
+        user_requirements_text = "\n".join(user_requirements)
+        
+        # Get a sample of services (limit to avoid token limits)
+        # If we have fewer than 20 services, use all of them
+        # Otherwise, sample 20 services randomly
+        services_sample = category_df.sample(min(20, len(category_df))) if len(category_df) > 20 else category_df
+        
+        # Create a list of service descriptions
+        service_descriptions = []
+        for idx, row in services_sample.iterrows():
+            service_descriptions.append({
+                'id': str(idx),  # Convert to string to ensure JSON serialization
+                'description': row['item_description'],
+                'unit_price': float(row['unit_price']),
+                'invoice_no': row['invoice_no']
+            })
+        
+        # Create a system prompt for matching
+        system_prompt = """You are a service matching assistant. Your task is to find the best matches between user requirements and available services.
+
+For each service, assign a match score from 0-100 based on how well it matches the user's requirements.
+Consider the following factors:
+1. Does the service description match the requested service type?
+2. Does it match the requested unit type (for aircon)?
+3. Does it match the requested HP size (for aircon)?
+4. Does it match other specific requirements?
+
+Return your response as a JSON array of objects with:
+- service_id: The ID of the service
+- match_score: A score from 0-100
+- reasoning: A brief explanation of why this score was assigned
+
+Only include services with a match score of 30 or higher, sorted by match score (highest first).
+Limit your response to the top 5 matches.
+"""
+        
+        # Create the prompt
+        prompt = f"""User requirements:
+{user_requirements_text}
+
+Available services:
+{json.dumps(service_descriptions, indent=2)}
+
+Find the best matches and explain your reasoning.
+"""
+        
+        # Invoke the LLM
+        response = llm.invoke([
+            SystemMessage(content=system_prompt),
+            HumanMessage(content=prompt)
+        ])
+        
+        # Extract the JSON from the response
+        response_text = response.content
+        
+        # Try to find and parse JSON in the response
+        matches_data = []
+        try:
+            # Look for JSON pattern
+            json_match = re.search(r'(\[[\s\S]*\])', response_text)
+            if json_match:
+                json_str = json_match.group(1)
+                matches_data = json.loads(json_str)
+            else:
+                # If no JSON pattern found, try to parse the whole response
+                matches_data = json.loads(response_text)
+        except json.JSONDecodeError:
+            logger.warning(f"Failed to parse JSON from LLM response: {response_text}")
+            return []
+        
+        # Convert the LLM results to the expected format
+        matches = []
+        for match in matches_data:
+            service_id = match.get('service_id')
+            match_score = match.get('match_score', 0)
+            
+            if service_id is not None and match_score >= 30:
+                try:
+                    # Convert service_id back to integer if it's a string representation of an integer
+                    if isinstance(service_id, str) and service_id.isdigit():
+                        service_id = int(service_id)
+                    
+                    # Get the row from the dataframe
+                    row = services_sample.loc[service_id]
+                    
+                    matches.append({
+                        'invoice_no': row['invoice_no'],
+                        'category': row['category'],
+                        'description': row['item_description'],
+                        'unit_price': float(row['unit_price']),
+                        'subtotal': float(row['subtotal']),
+                        'tax': float(row['tax']),
+                        'total': float(row['total']),
+                        'match_score': match_score,
+                        'reasoning': match.get('reasoning', '')
+                    })
+                except (KeyError, TypeError) as e:
+                    logger.warning(f"Error retrieving service with ID {service_id}: {e}")
+                    continue
+        
+        # Sort matches by score (highest first)
+        matches.sort(key=lambda x: x['match_score'], reverse=True)
+        
+        # If we don't have any matches from LLM, fall back to traditional matching
+        if not matches:
+            logger.info("No matches found with LLM, falling back to traditional matching")
+            return find_matching_services_traditional(info)
+        
+        return matches
     
-def find_matching_services(info: Dict) -> List[Dict]:
-    """Find services that match the given information using fuzzy matching"""
+    except Exception as e:
+        logger.error(f"Error finding matching services with LLM: {e}")
+        # Fall back to traditional matching in case of errors
+        logger.info("Error with LLM matching, falling back to traditional matching")
+        return find_matching_services_traditional(info)
+def find_matching_services_traditional(info: Dict) -> List[Dict]:
+    """Find services that match the given information using traditional fuzzy matching"""
     try:
         # Get data analysis
         df = get_quotation_data()
@@ -526,6 +691,8 @@ def find_matching_services(info: Dict) -> List[Dict]:
                 search_terms.append('ceiling')
             elif unit_type == 'cassette':
                 search_terms.append('cassette')
+            elif unit_type == 'window':
+                search_terms.append('window')
         
         # Add service type if available
         if 'service_type' in info and info['service_type']:
@@ -625,8 +792,33 @@ def find_matching_services(info: Dict) -> List[Dict]:
         return matches
     
     except Exception as e:
-        logger.error(f"Error finding matching services: {e}")
+        logger.error(f"Error finding matching services with traditional method: {e}")
         return []
+
+def find_matching_services(info: Dict) -> List[Dict]:
+    """Find services that match the given information, using LLM or traditional method based on configuration"""
+    # Check if we should use LLM for matching
+    use_llm_for_matching = True  # You can make this configurable
+    
+    if use_llm_for_matching:
+        try:
+            # Try LLM matching first
+            matches = find_matching_services_with_llm(info)
+            
+            # If LLM matching fails or returns no results, fall back to traditional matching
+            if not matches:
+                logger.info("LLM matching returned no results, falling back to traditional matching")
+                matches = find_matching_services_traditional(info)
+                
+            return matches
+        except Exception as e:
+            logger.error(f"Error with LLM matching: {e}")
+            # Fall back to traditional matching
+            logger.info("Error with LLM matching, falling back to traditional matching")
+            return find_matching_services_traditional(info)
+    else:
+        # Use traditional matching
+        return find_matching_services_traditional(info)
 
 def generate_quotation(service: Dict, quantity: int = 1) -> str:
     """Generate a quotation based on the service information and quantity"""
@@ -656,7 +848,6 @@ def generate_quotation(service: Dict, quantity: int = 1) -> str:
     
     return quotation
 
-
 def is_problematic_response(response_text):
     """Check if the response is problematic (raw data, code, etc.)"""
     if not response_text:
@@ -679,6 +870,7 @@ def is_problematic_response(response_text):
         return True
         
     return False
+
 def handle_direct_response(message: str, last_question_type: str) -> Dict:
     """Handle direct responses to specific questions"""
     message_lower = message.lower().strip()
@@ -768,6 +960,7 @@ def handle_direct_response(message: str, last_question_type: str) -> Dict:
     
     # No direct match found
     return {}
+    
 def generate_dynamic_response(query: str, context: Dict = None) -> Dict:
     """
     Generate a dynamic response based on the query and context.
@@ -853,6 +1046,10 @@ def generate_dynamic_response(query: str, context: Dict = None) -> Dict:
 
 This quotation is for {best_match['description']} with a match score of {int(best_match['match_score'])}%.
 """
+            
+            # If the match was found using LLM and has reasoning, include it
+            if 'reasoning' in best_match and best_match['reasoning']:
+                response += f"\nMatching rationale: {best_match['reasoning']}\n"
             
             # If there are other close matches, mention them
             if len(matches) > 1:
@@ -947,146 +1144,7 @@ For example:
             "needs_more_info": True,
             "next_question": "Could you please provide more specific details about the service you need?"
         }
-    
-def extract_entities_with_llm(message: str, context: Dict = None) -> Dict:
-    """Extract entities from a message using the LLM"""
-    try:
-        # Check for direct answers to previous questions first
-        if context and context.get('last_question_type'):
-            direct_response = handle_direct_response(message, context.get('last_question_type'))
-            if direct_response:
-                logger.info(f"Extracted direct response: {direct_response}")
-                return direct_response
-        
-        # Get the LLM
-        llm = get_entity_extraction_llm()
-        
-        # Get data analysis to understand available categories and services
-        analysis = analyze_data()
-        categories = analysis['categories']
-        
-        # Create a system prompt for entity extraction
-        system_prompt = f"""You are an entity extraction assistant for a quotation system. Extract structured information from the user's message about service requests.
 
-Available service categories: {', '.join(categories)}
-
-Extract the following entities if present:
-1. category: The service category (e.g., Aircon Servicing, Aircon Installation, Aircon Repair, Plumber)
-2. unit_type: For aircon, the type of unit (e.g., wall, ceiling, cassette, window)
-3. service_type: The type of service needed (e.g., chemical_cleaning, basic_servicing, gas_topup, repair, installation)
-4. hp_size: For aircon, the horsepower (e.g., 1.0, 1.5, 2.0, 2.5, 3.0)
-5. brand: For aircon, the brand name (e.g., daikin, panasonic, samsung, lg)
-6. fixture_type: For plumbing, the type of fixture (e.g., toilet, sink, pipe, water_heater, water_tank)
-7. issue_type: For repairs, the type of issue (e.g., leaking, clogged, broken, not_cooling, noise)
-8. quantity: The number of units or services needed
-
-Return ONLY a JSON object with the extracted entities. If an entity is not present, do not include it in the JSON.
-"""
-        
-        # Create the prompt
-        prompt = f"Extract service request information from this message: {message}"
-        
-        # Invoke the LLM
-        response = llm.invoke([
-            SystemMessage(content=system_prompt),
-            HumanMessage(content=prompt)
-        ])
-        
-        # Extract the JSON from the response
-        response_text = response.content
-        
-        # Try to find and parse JSON in the response
-        try:
-            # Look for JSON pattern
-            json_match = re.search(r'({[\s\S]*})', response_text)
-            if json_match:
-                json_str = json_match.group(1)
-                extracted_info = json.loads(json_str)
-            else:
-                # If no JSON pattern found, try to parse the whole response
-                extracted_info = json.loads(response_text)
-        except json.JSONDecodeError:
-            # If JSON parsing fails, extract information manually
-            logger.warning(f"Failed to parse JSON from LLM response: {response_text}")
-            extracted_info = {}
-            
-            # Extract category
-            if "category" in response_text.lower():
-                for category in categories:
-                    if category.lower() in response_text.lower():
-                        extracted_info["category"] = category
-                        break
-            
-            # Extract other common fields
-            for field in ["unit_type", "service_type", "hp_size", "brand", "fixture_type", "issue_type", "quantity"]:
-                if field in response_text.lower():
-                    field_match = re.search(rf"{field}[:\s]+([a-zA-Z0-9_\.]+)", response_text, re.IGNORECASE)
-                    if field_match:
-                        extracted_info[field] = field_match.group(1)
-        
-        # Manual extraction for common terms
-        if "wall mounted" in message.lower() or "wall-mounted" in message.lower():
-            extracted_info["unit_type"] = "wall"
-        elif "window" in message.lower():
-            extracted_info["unit_type"] = "window"
-        elif "cassette" in message.lower():
-            extracted_info["unit_type"] = "cassette"
-        elif "ceiling" in message.lower():
-            extracted_info["unit_type"] = "ceiling"
-        elif "split" in message.lower() and "unit" in message.lower():
-            extracted_info["unit_type"] = "wall"  # Most split units are wall-mounted
-        
-        # Manual extraction for horsepower
-        hp_match = re.search(r'(\d+(\.\d+)?)\s*hp', message.lower())
-        if hp_match:
-            extracted_info["hp_size"] = hp_match.group(1)
-        elif re.match(r'^\d+(\.\d+)?$', message.strip()):
-            # If the message is just a number, it might be the HP size or quantity
-            num_value = float(message.strip())
-            if context and context.get('last_question_type') == 'hp_size':
-                extracted_info["hp_size"] = str(num_value)
-            elif context and context.get('last_question_type') == 'quantity':
-                extracted_info["quantity"] = int(num_value)
-            elif num_value > 0 and num_value <= 5:
-                # Likely HP size if between 0 and 5
-                extracted_info["hp_size"] = str(num_value)
-            elif num_value > 0 and num_value <= 20:
-                # Likely quantity if between 1 and 20
-                extracted_info["quantity"] = int(num_value)
-        
-        quantity_match = re.match(r'^\s*(\d+)\s*$', message)
-        if quantity_match and not "hp_size" in extracted_info:
-            extracted_info["quantity"] = int(quantity_match.group(1))
-        
-        # Extract service type from common terms
-        if "general cleaning" in message.lower() or "basic cleaning" in message.lower():
-            extracted_info["service_type"] = "basic_servicing"
-        elif "chemical" in message.lower() or "chemical wash" in message.lower():
-            extracted_info["service_type"] = "chemical_cleaning"
-        elif "gas" in message.lower() or "top up" in message.lower() or "refill" in message.lower():
-            extracted_info["service_type"] = "gas_topup"
-        
-        # Extract fixture type for plumbing
-        if "toilet" in message.lower() or "wc" in message.lower():
-            extracted_info["fixture_type"] = "toilet"
-        elif "sink" in message.lower() or "basin" in message.lower():
-            extracted_info["fixture_type"] = "sink"
-        elif "pipe" in message.lower() or "drain" in message.lower():
-            extracted_info["fixture_type"] = "pipe"
-        
-        # Extract issue type
-        if "leak" in message.lower():
-            extracted_info["issue_type"] = "leaking"
-        elif "clog" in message.lower() or "block" in message.lower():
-            extracted_info["issue_type"] = "clogged"
-        
-        logger.info(f"Extracted entities: {extracted_info}")
-        return extracted_info
-    
-    except Exception as e:
-        logger.error(f"Error extracting entities with LLM: {e}")
-        return {}
-    
 def get_default_system_prompt():
     """Get the default system prompt based on the data"""
     try:
@@ -1138,6 +1196,7 @@ When responding to pricing questions:
 
 For follow-up questions, maintain context from previous messages.
 """
+
 def detect_and_handle_off_topic_with_llm(message: str, context: Dict) -> Tuple[bool, str]:
     """
     Use LLM to detect if a message is off-topic and generate an appropriate response
@@ -1385,7 +1444,102 @@ Return ONLY a JSON object with a single field "is_confirmation" set to true or f
         message_lower = message.lower().strip()
         confirmation_phrases = ["yes", "confirm", "accept", "agree", "proceed", "ok", "okay"]
         return any(phrase in message_lower for phrase in confirmation_phrases)
-   
+
+def get_price_estimate(category, service_type=None):
+    """Get a price estimate for a category and optional service type based on analyzed data"""
+    analysis = analyze_data()
+    df = get_quotation_data()
+    
+    if category in analysis['category_analysis']:
+        # Filter by category
+        category_df = df[df['category'] == category]
+        
+        # If service type is specified, further filter the data
+        if service_type:
+            # Create a filter based on service type keywords
+            if service_type == 'chemical_cleaning':
+                filter_terms = ['chemical', 'chem']
+            elif service_type == 'basic_servicing':
+                filter_terms = ['basic', 'general', 'normal']
+            elif service_type == 'gas_topup':
+                filter_terms = ['gas', 'top up', 'refill']
+            else:
+                filter_terms = [service_type.replace('_', ' ')]
+                
+            # Apply the filter
+            filtered_df = category_df[category_df['item_description'].str.lower().apply(
+                lambda x: any(term in x.lower() for term in filter_terms))]
+            
+            # If we have results after filtering, use them; otherwise, fall back to category
+            if not filtered_df.empty:
+                price_range = {
+                    'min': filtered_df['unit_price'].min(),
+                    'max': filtered_df['unit_price'].max(),
+                    'median': filtered_df['unit_price'].median(),
+                    'mean': filtered_df['unit_price'].mean()
+                }
+                
+                service_type_display = service_type.replace('_', ' ').title()
+                return f"For {category} - {service_type_display}, prices typically range from RM {price_range['min']:.2f} to RM {price_range['max']:.2f}, with an average cost of RM {price_range['mean']:.2f}."
+        
+        # If no service type specified or no matches found, return category-level stats
+        stats = analysis['category_analysis'][category]['price_range']
+        return f"For {category}, prices typically range from RM {stats['min']:.2f} to RM {stats['max']:.2f}, with an average cost of RM {stats['mean']:.2f}."
+    
+    return "Sorry, we don't have pricing data for that service."
+
+def get_popular_services(category, service_type=None):
+    """Get popular services for a category and optional service type based on analyzed data"""
+    analysis = analyze_data()
+    df = get_quotation_data()
+    
+    if category in analysis['category_analysis']:
+        # Get all services for the category
+        category_df = df[df['category'] == category]
+        
+        # If service type is specified, filter the data
+        if service_type:
+            # Create a filter based on service type keywords
+            if service_type == 'chemical_cleaning':
+                filter_terms = ['chemical', 'chem']
+            elif service_type == 'basic_servicing':
+                filter_terms = ['basic', 'general', 'normal']
+            elif service_type == 'gas_topup':
+                filter_terms = ['gas', 'top up', 'refill']
+            else:
+                filter_terms = [service_type.replace('_', ' ')]
+                
+            # Apply the filter
+            filtered_df = category_df[category_df['item_description'].str.lower().apply(
+                lambda x: any(term in x.lower() for term in filter_terms))]
+            
+            # If we have results after filtering, use them
+            if not filtered_df.empty:
+                # Get the most common services
+                common_services = []
+                for _, row in filtered_df.drop_duplicates(subset=['item_description']).iterrows():
+                    common_services.append({
+                        'description': row['item_description'],
+                        'unit_price': row['unit_price']
+                    })
+                
+                # Sort by frequency and take top 3
+                if common_services:
+                    service_counts = filtered_df['item_description'].value_counts()
+                    common_services.sort(key=lambda x: service_counts.get(x['description'], 0), reverse=True)
+                    common_services = common_services[:3]
+                    
+                    service_type_display = service_type.replace('_', ' ').title()
+                    services_text = ", ".join([f"{s['description']} (RM {s['unit_price']:.2f})" for s in common_services])
+                    return f"Our most popular {category} - {service_type_display} services include: {services_text}"
+        
+        # If no service type specified or no matches found, return category-level popular services
+        common_services = analysis['category_analysis'][category]['common_services'][:3]
+        if common_services:
+            services_text = ", ".join([f"{s['description']} (RM {s['unit_price']:.2f})" for s in common_services])
+            return f"Our most popular {category} services include: {services_text}"
+    
+    return None
 def process_message(message: str, session_id: str = "default", system_prompt: str = None):
     """Process a message and generate a response using a state machine approach"""
     global _conversation_context
@@ -1394,15 +1548,86 @@ def process_message(message: str, session_id: str = "default", system_prompt: st
         # Log the incoming request
         logger.info(f"Processing message for session {session_id}: {message}")
         
-        # Check for reset command
-        if message.lower() == 'reset':
-            if session_id in _conversation_context:
-                del _conversation_context[session_id]
-            return {
-                "response": "Conversation has been reset. How can I help you today?",
-                "display_quotation": False,
-                "quotation": None
-            }
+        # Check for reset or stop commands using LLM for more natural language understanding
+        if any(term in message.lower() for term in ['reset', 'stop', 'restart', 'clear', 'start over', 'begin again']):
+            # Use LLM to confirm if this is truly a reset request
+            llm = get_entity_extraction_llm()
+            system_prompt = """You are a conversation analyzer. Determine if the user's message is requesting to reset or restart the conversation.
+            
+Examples of reset requests include: "reset", "start over", "let's begin again", "restart", "clear the conversation", "can we start fresh".
+
+Return ONLY a JSON object with a single field "is_reset_request" set to true or false.
+"""
+            prompt = f"Is this message requesting to reset or restart the conversation? Message: '{message}'"
+            
+            try:
+                response = llm.invoke([
+                    SystemMessage(content=system_prompt),
+                    HumanMessage(content=prompt)
+                ])
+                
+                response_text = response.content
+                
+                # Try to find and parse JSON in the response
+                json_match = re.search(r'({[\s\S]*})', response_text)
+                if json_match:
+                    json_str = json_match.group(1)
+                    result = json.loads(json_str)
+                    is_reset_request = result.get('is_reset_request', False)
+                else:
+                    # If no JSON pattern found, check for "true" in the response
+                    is_reset_request = "true" in response_text.lower()
+                
+                if is_reset_request:
+                    if session_id in _conversation_context:
+                        # Reset the conversation context but keep the session ID
+                        _conversation_context[session_id] = {
+                            # Service-specific information
+                            'category': None,
+                            'unit_type': None,
+                            'service_type': None,
+                            'hp_size': None,
+                            'brand': None,
+                            'fixture_type': None,
+                            'issue_type': None,
+                            'quantity': None,
+                            
+                            # Conversation tracking
+                            'chat_history': [],
+                            'last_query': None,
+                            'last_question_type': None,
+                            
+                            # Quotation information
+                            'last_quotation': None,
+                            'clean_quotation': None,
+                            'tabular_quotation': None,
+                            
+                            # State management
+                            'state': ConversationState.INITIAL,
+                            'confirmed_quotations': []  # Track all confirmed quotations
+                        }
+                    return {
+                        "response": "I've reset our conversation. How can I help you with service quotations today?",
+                        "display_quotation": False,
+                        "quotation": None
+                    }
+            except Exception as e:
+                logger.error(f"Error using LLM to detect reset request: {e}")
+                # Fall back to simple pattern matching
+                if message.lower() in ['reset', 'stop', 'restart', 'clear', 'start over']:
+                    if session_id in _conversation_context:
+                        _conversation_context[session_id] = {
+                            'category': None, 'unit_type': None, 'service_type': None, 'hp_size': None,
+                            'brand': None, 'fixture_type': None, 'issue_type': None, 'quantity': None,
+                            'chat_history': [], 'last_query': None, 'last_question_type': None,
+                            'last_quotation': None, 'clean_quotation': None, 'tabular_quotation': None,
+                            'state': ConversationState.INITIAL, 'confirmed_quotations': []
+                        }
+                    return {
+                        "response": "Conversation has been reset. How can I help you today?",
+                        "display_quotation": False,
+                        "quotation": None
+                    }
         
         # Get or initialize conversation context
         if session_id not in _conversation_context:
@@ -1437,64 +1662,359 @@ def process_message(message: str, session_id: str = "default", system_prompt: st
         
         logger.info(f"Current conversation state: {current_state}")
         
+        # Use LLM to detect if user is asking about price ranges
+        if any(term in message.lower() for term in ['price', 'cost', 'how much', 'range', 'expensive', 'cheap']):
+            llm = get_entity_extraction_llm()
+            system_prompt = """You are a conversation analyzer. Determine if the user's message is asking about pricing or price ranges.
+            
+Examples of price inquiries include: "how much does it cost", "what's the price range", "is it expensive", "what's the typical cost", "price estimate".
+
+Return ONLY a JSON object with a single field "is_price_inquiry" set to true or false.
+"""
+            prompt = f"Is this message asking about pricing or price ranges? Message: '{message}'"
+            
+            try:
+                response = llm.invoke([
+                    SystemMessage(content=system_prompt),
+                    HumanMessage(content=prompt)
+                ])
+                
+                response_text = response.content
+                
+                # Try to find and parse JSON in the response
+                json_match = re.search(r'({[\s\S]*})', response_text)
+                if json_match:
+                    json_str = json_match.group(1)
+                    result = json.loads(json_str)
+                    is_price_inquiry = result.get('is_price_inquiry', False)
+                else:
+                    # If no JSON pattern found, check for "true" in the response
+                    is_price_inquiry = "true" in response_text.lower()
+                
+                if is_price_inquiry:
+                    # Extract entities to determine what service they're asking about
+                    new_entities = extract_entities_with_llm(message, context)
+                    
+                    # Update context with new entities
+                    for key, value in new_entities.items():
+                        if value and key in ['category', 'unit_type', 'service_type', 'hp_size', 'brand', 'fixture_type', 'issue_type', 'quantity']:
+                            context[key] = value
+                            logger.info(f"Updated context {key} = {value}")
+                    
+                    category = context.get('category') or (new_entities.get('category') if new_entities else None)
+                    service_type = context.get('service_type') or (new_entities.get('service_type') if new_entities else None)
+                    
+                    if category:
+                        # Get price estimate for the category and service type
+                        price_estimate = get_price_estimate(category, service_type)
+                        
+                        # Get popular services if available
+                        popular_services = get_popular_services(category, service_type)
+                        
+                        response = f"Here's the information about pricing:\n\n{price_estimate}\n\n"
+                        
+                        if popular_services:
+                            response += f"{popular_services}\n\n"
+                        
+                        response += "Would you like me to provide a specific quotation based on your requirements?"
+                        
+                        context['chat_history'].append((message, response))
+                        return {
+                            "response": response,
+                            "display_quotation": False,
+                            "quotation": None
+                        }
+            except Exception as e:
+                logger.error(f"Error using LLM to detect price inquiry: {e}")
+                # Fall back to simple pattern matching
+                if ('price' in message.lower() or 'cost' in message.lower() or 'how much' in message.lower() or 'range' in message.lower()):
+                    # Continue with existing price range handling...
+                    new_entities = extract_entities_with_llm(message, context)
+                    
+                    # Update context with new entities
+                    for key, value in new_entities.items():
+                        if value and key in ['category', 'unit_type', 'service_type', 'hp_size', 'brand', 'fixture_type', 'issue_type', 'quantity']:
+                            context[key] = value
+                            logger.info(f"Updated context {key} = {value}")
+                    
+                    category = context.get('category') or (new_entities.get('category') if new_entities else None)
+                    service_type = context.get('service_type') or (new_entities.get('service_type') if new_entities else None)
+                    
+                    if category:
+                        # Get price estimate for the category and service type
+                        price_estimate = get_price_estimate(category, service_type)
+                        
+                        # Get popular services if available
+                        popular_services = get_popular_services(category, service_type)
+                        
+                        response = f"Here's the information about pricing:\n\n{price_estimate}\n\n"
+                        
+                        if popular_services:
+                            response += f"{popular_services}\n\n"
+                        
+                        response += "Would you like me to provide a specific quotation based on your requirements?"
+                        
+                        context['chat_history'].append((message, response))
+                        return {
+                            "response": response,
+                            "display_quotation": False,
+                            "quotation": None
+                        }
+        
         # Handle the message based on the current state
         if current_state == ConversationState.ASKING_FOR_ANOTHER:
-            # User is responding to "Would you like another quotation?"
-            if is_affirmative_response(message):
-                # Reset service-specific context for a new quotation
+            # Use LLM to better detect affirmative/negative responses
+            llm = get_entity_extraction_llm()
+            system_prompt = """You are a response classifier. Determine if the user's message is an affirmative or negative response.
+
+Examples of affirmative responses: "yes", "yeah", "sure", "okay", "I'd like that", "please do", "go ahead"
+Examples of negative responses: "no", "nope", "not now", "I'm good", "that's all", "no thanks"
+
+Return ONLY a JSON object with two fields:
+- "is_affirmative": true/false
+- "is_negative": true/false
+"""
+            prompt = f"Classify this response: '{message}'"
+            
+            try:
+                response = llm.invoke([
+                    SystemMessage(content=system_prompt),
+                    HumanMessage(content=prompt)
+                ])
+                
+                response_text = response.content
+                
+                # Try to find and parse JSON in the response
+                json_match = re.search(r'({[\s\S]*})', response_text)
+                if json_match:
+                    json_str = json_match.group(1)
+                    result = json.loads(json_str)
+                    is_affirmative = result.get('is_affirmative', False)
+                    is_negative = result.get('is_negative', False)
+                else:
+                    # Fall back to existing functions
+                    is_affirmative = is_affirmative_response(message)
+                    is_negative = is_negative_response(message)
+                
+                if is_affirmative:
+                    # Reset service-specific context for a new quotation
+                    reset_service_context(context)
+                    context['state'] = ConversationState.GATHERING_INFO
+                    
+                    # Use data analysis to suggest categories
+                    analysis = analyze_data()
+                    categories = analysis['categories']
+                    categories_str = ", ".join(categories)
+                    
+                    response = f"Great! What type of service would you like a quotation for? We offer {categories_str}."
+                    context['chat_history'].append((message, response))
+                    return {
+                        "response": response,
+                        "display_quotation": False,
+                        "quotation": None
+                    }
+                elif is_negative:
+                    context['state'] = ConversationState.ENDING
+                    response = "Thank you for using our service! Your quotations are ready for download. If you need anything else in the future, just start a new chat."
+                    context['chat_history'].append((message, response))
+                    return {
+                        "response": response,
+                        "display_quotation": False,
+                        "quotation": None
+                    }
+            except Exception as e:
+                logger.error(f"Error using LLM to classify response: {e}")
+                # Fall back to existing functions
+                if is_affirmative_response(message):
+                    # Reset service-specific context for a new quotation
+                    reset_service_context(context)
+                    context['state'] = ConversationState.GATHERING_INFO
+                    
+                    # Use data analysis to suggest categories
+                    analysis = analyze_data()
+                    categories = analysis['categories']
+                    categories_str = ", ".join(categories)
+                    
+                    response = f"Great! What type of service would you like a quotation for? We offer {categories_str}."
+                    context['chat_history'].append((message, response))
+                    return {
+                        "response": response,
+                        "display_quotation": False,
+                        "quotation": None
+                    }
+                elif is_negative_response(message):
+                    context['state'] = ConversationState.ENDING
+                    response = "Thank you for using our service! Your quotations are ready for download. If you need anything else in the future, just start a new chat."
+                    context['chat_history'].append((message, response))
+                    return {
+                        "response": response,
+                        "display_quotation": False,
+                        "quotation": None
+                    }
+            
+            # Check if this is a new inquiry rather than a yes/no response
+            new_entities = extract_entities_with_llm(message, context)
+            if new_entities and ('category' in new_entities or 'service_type' in new_entities):
+                # This appears to be a new inquiry, so handle it as such
                 reset_service_context(context)
                 context['state'] = ConversationState.GATHERING_INFO
                 
-                response = "Great! What type of service would you like a quotation for? (e.g., Aircon Servicing, Aircon Installation, Aircon Repair, or Plumber)"
-                context['chat_history'].append((message, response))
-                return {
-                    "response": response,
-                    "display_quotation": False,
-                    "quotation": None
-                }
-            elif is_negative_response(message):
-                context['state'] = ConversationState.ENDING
-                response = "Thank you for using our service! Your quotations are ready for download. If you need anything else in the future, just start a new chat."
-                context['chat_history'].append((message, response))
-                return {
-                    "response": response,
-                    "display_quotation": False,
-                    "quotation": None
-                }
+                # Update context with the new entities
+                for key, value in new_entities.items():
+                    if value and key in ['category', 'unit_type', 'service_type', 'hp_size', 'brand', 'fixture_type', 'issue_type', 'quantity']:
+                        context[key] = value
+                        logger.info(f"Updated context {key} = {value}")
+                
+                # If they're asking about price ranges, provide that information
+                if 'price' in message.lower() or 'cost' in message.lower() or 'how much' in message.lower() or 'range' in message.lower():
+                    category = context.get('category')
+                    service_type = context.get('service_type')
+                    
+                    if category:
+                        # Get price estimate for the category and service type
+                        price_estimate = get_price_estimate(category, service_type)
+                        
+                        # Get popular services if available
+                        popular_services = get_popular_services(category, service_type)
+                        
+                        response = f"Here's the information about pricing:\n\n{price_estimate}\n\n"
+                        
+                        if popular_services:
+                            response += f"{popular_services}\n\n"
+                        response += "Would you like me to provide a specific quotation based on your requirements?"
+                        
+                        context['chat_history'].append((message, response))
+                        return {
+                            "response": response,
+                            "display_quotation": False,
+                            "quotation": None
+                        }
         
         elif current_state == ConversationState.QUOTATION_PRESENTED:
-            # User is responding to a presented quotation
-            if is_confirmation_message(message):
-                # Store the confirmed quotation
-                if context.get('clean_quotation'):
-                    context['confirmed_quotations'].append(context['clean_quotation'])
+            # Use LLM to better detect confirmation messages
+            llm = get_entity_extraction_llm()
+            system_prompt = """You are a response classifier. Determine if the user's message is confirming a quotation or proposal.
+
+Examples of confirmation messages: "yes", "confirm", "I confirm", "sounds good", "that works", "proceed", "go ahead", "I accept", "agreed"
+Examples of rejection/dispute messages: "no", "that's wrong", "I disagree", "that's not right", "change it", "modify", "too expensive"
+
+Return ONLY a JSON object with two fields:
+- "is_confirmation": true/false
+- "is_dispute": true/false
+"""
+            prompt = f"Is this message confirming a quotation? Message: '{message}'"
+            
+            try:
+                response = llm.invoke([
+                    SystemMessage(content=system_prompt),
+                    HumanMessage(content=prompt)
+                ])
                 
-                context['state'] = ConversationState.QUOTATION_CONFIRMED
+                response_text = response.content
                 
-                # Create a confirmation response with a follow-up question
-                confirmation_response = "Thank you for confirming your quotation. Your service request has been recorded. You can now download your quotation as a PDF from the quotations panel.\n\nWould you like to get a quotation for any other service?"
+                # Try to find and parse JSON in the response
+                json_match = re.search(r'({[\s\S]*})', response_text)
+                if json_match:
+                    json_str = json_match.group(1)
+                    result = json.loads(json_str)
+                    is_confirmation = result.get('is_confirmation', False)
+                    is_dispute = result.get('is_dispute', False)
+                else:
+                    # Fall back to existing functions
+                    is_confirmation = is_confirmation_message(message)
+                    is_dispute = any(phrase in message.lower() for phrase in ["dispute", "disagree", "not right", "incorrect", "wrong", "change", "replace"])
                 
-                # Update chat history
-                context['chat_history'].append((message, confirmation_response))
+                if is_confirmation:
+                    # Store the confirmed quotation
+                    if context.get('clean_quotation'):
+                        context['confirmed_quotations'].append(context['clean_quotation'])
+                    
+                    context['state'] = ConversationState.QUOTATION_CONFIRMED
+                    
+                    # Create a confirmation response with a follow-up question
+                    confirmation_response = "Thank you for confirming your quotation. Your service request has been recorded. You can now download your quotation as a PDF from the quotations panel.\n\nWould you like to get a quotation for any other service?"
+                    
+                    # Update chat history
+                    context['chat_history'].append((message, confirmation_response))
+                    
+                    # Move to the next state
+                    context['state'] = ConversationState.ASKING_FOR_ANOTHER
+                    
+                    return {
+                        "response": confirmation_response,
+                        "display_quotation": True,
+                        "quotation": context.get('clean_quotation', context.get('last_quotation')),
+                        "confirm_quotation": True
+                    }
+                elif is_dispute:
+                    context['state'] = ConversationState.DISPUTE_HANDLING
+                    dispute_response = "I understand you'd like to revise the quotation. Let me help you with that. Could you please specify what aspects of the quotation you'd like to change?"
+                    context['chat_history'].append((message, dispute_response))
+                    return {
+                        "response": dispute_response,
+                        "display_quotation": False,
+                        "quotation": None
+                    }
+            except Exception as e:
+                logger.error(f"Error using LLM to detect confirmation: {e}")
+                # Fall back to existing methods
+                if is_confirmation_message(message):
+                    # Store the confirmed quotation
+                    if context.get('clean_quotation'):
+                        context['confirmed_quotations'].append(context['clean_quotation'])
+                    
+                    context['state'] = ConversationState.QUOTATION_CONFIRMED
+                    
+                    # Create a confirmation response with a follow-up question
+                    confirmation_response = "Thank you for confirming your quotation. Your service request has been recorded. You can now download your quotation as a PDF from the quotations panel.\n\nWould you like to get a quotation for any other service?"
+                    
+                    # Update chat history
+                    context['chat_history'].append((message, confirmation_response))
+                    
+                    # Move to the next state
+                    context['state'] = ConversationState.ASKING_FOR_ANOTHER
+                    
+                    return {
+                        "response": confirmation_response,
+                        "display_quotation": True,
+                        "quotation": context.get('clean_quotation', context.get('last_quotation')),
+                        "confirm_quotation": True
+                    }
+                elif any(phrase in message.lower() for phrase in ["dispute", "disagree", "not right", "incorrect", "wrong", "change", "replace"]):
+                    context['state'] = ConversationState.DISPUTE_HANDLING
+                    dispute_response = "I understand you'd like to revise the quotation. Let me help you with that. Could you please specify what aspects of the quotation you'd like to change?"
+                    context['chat_history'].append((message, dispute_response))
+                    return {
+                        "response": dispute_response,
+                        "display_quotation": False,
+                        "quotation": None
+                    }
+            
+            # Handle price range inquiries directly from the quotation presented state
+            if 'price' in message.lower() or 'cost' in message.lower() or 'how much' in message.lower() or 'range' in message.lower():
+                category = context.get('category')
+                service_type = context.get('service_type')
                 
-                # Move to the next state
-                context['state'] = ConversationState.ASKING_FOR_ANOTHER
-                
-                return {
-                    "response": confirmation_response,
-                    "display_quotation": True,
-                    "quotation": context.get('clean_quotation', context.get('last_quotation')),
-                    "confirm_quotation": True
-                }
-            elif any(phrase in message.lower() for phrase in ["dispute", "disagree", "not right", "incorrect", "wrong", "change", "replace"]):
-                context['state'] = ConversationState.DISPUTE_HANDLING
-                dispute_response = "I understand you'd like to revise the quotation. Let me help you with that. Could you please specify what aspects of the quotation you'd like to change?"
-                context['chat_history'].append((message, dispute_response))
-                return {
-                    "response": dispute_response,
-                    "display_quotation": False,
-                    "quotation": None
-                }
+                if category:
+                    # Get price estimate for the category and service type
+                    price_estimate = get_price_estimate(category, service_type)
+                    
+                    # Get popular services if available
+                    popular_services = get_popular_services(category, service_type)
+                    
+                    response = f"Here's the information about pricing:\n\n{price_estimate}\n\n"
+                    
+                    if popular_services:
+                        response += f"{popular_services}\n\n"
+                    
+                    response += "Would you like to proceed with the quotation I provided earlier? Please confirm with 'Yes' or 'Confirm'."
+                    
+                    context['chat_history'].append((message, response))
+                    return {
+                        "response": response,
+                        "display_quotation": False,
+                        "quotation": None
+                    }
         
         elif current_state == ConversationState.QUOTATION_CONFIRMED:
             # This state should transition quickly to ASKING_FOR_ANOTHER
@@ -1510,15 +2030,58 @@ def process_message(message: str, session_id: str = "default", system_prompt: st
         
         # For all other states, process normally
         
-        # Check if message is off-topic
-        is_off_topic, off_topic_response = detect_and_handle_off_topic_with_llm(message, context)
-        if is_off_topic and off_topic_response:
-            context['chat_history'].append((message, off_topic_response))
-            return {
-                "response": off_topic_response,
-                "display_quotation": False,
-                "quotation": None
-            }
+        # Check if message is off-topic using LLM
+        llm = get_entity_extraction_llm()
+        system_prompt = """You are a conversation analyzer. Determine if the user's message is off-topic for a service quotation system.
+
+A service quotation system helps users get price quotes for services like aircon servicing, aircon installation, aircon repair, and plumbing.
+
+Off-topic messages might include:
+- Personal questions unrelated to services
+- Questions about unrelated products or services
+- General chitchat not related to getting a quotation
+
+Return ONLY a JSON object with two fields:
+- "is_off_topic": true/false
+- "response": a helpful response if off-topic, guiding the user back to service quotations
+"""
+        prompt = f"Is this message off-topic for a service quotation system? Message: '{message}'"
+        
+        try:
+            response = llm.invoke([
+                SystemMessage(content=system_prompt),
+                HumanMessage(content=prompt)
+            ])
+            
+            response_text = response.content
+            
+            # Try to find and parse JSON in the response
+            json_match = re.search(r'({[\s\S]*})', response_text)
+            if json_match:
+                json_str = json_match.group(1)
+                result = json.loads(json_str)
+                is_off_topic = result.get('is_off_topic', False)
+                off_topic_response = result.get('response', None)
+                
+                if is_off_topic and off_topic_response:
+                    context['chat_history'].append((message, off_topic_response))
+                    return {
+                        "response": off_topic_response,
+                        "display_quotation": False,
+                        "quotation": None
+                    }
+            
+        except Exception as e:
+            logger.error(f"Error using LLM to detect off-topic message: {e}")
+            # Fall back to existing method
+            is_off_topic, off_topic_response = detect_and_handle_off_topic_with_llm(message, context)
+            if is_off_topic and off_topic_response:
+                context['chat_history'].append((message, off_topic_response))
+                return {
+                    "response": off_topic_response,
+                    "display_quotation": False,
+                    "quotation": None
+                }
         
         # Extract entities from the message
         new_entities = extract_entities_with_llm(message, context)
@@ -1576,17 +2139,56 @@ def process_message(message: str, session_id: str = "default", system_prompt: st
             
             return {
                 "response": full_response,
-                "display_quotation": False,
+                "display_quotation": True,
                 "quotation": dynamic_result['response']
             }
         
-        # If we get here, use the agent as fallback (rest of the function remains the same)
-        # ...
+        # If we get here, use the data analysis to provide a general response
+        category = context.get('category')
+        service_type = context.get('service_type')
+        
+        if category:
+            # Use data analysis to provide price ranges and popular services
+            price_estimate = get_price_estimate(category, service_type)
+            popular_services = get_popular_services(category, service_type)
+            
+            response = f"""I'm still working to understand your requirements. Here's some general information that might help:
+
+{price_estimate}
+
+"""
+            if popular_services:
+                response += f"{popular_services}\n\n"
+            
+            response += "Could you provide more specific details about what you're looking for?"
+            
+            context['chat_history'].append((message, response))
+            return {
+                "response": response,
+                "display_quotation": False,
+                "quotation": None
+            }
+        else:
+            # If we don't have a category, provide a general response
+            analysis = analyze_data()
+            categories = analysis['categories']
+            categories_str = ", ".join(categories)
+            
+            response = f"""I can help you get quotations for various services including {categories_str}. 
+            
+What type of service are you looking for?"""
+            
+            context['chat_history'].append((message, response))
+            return {
+                "response": response,
+                "display_quotation": False,
+                "quotation": None
+            }
 
     except Exception as e:
         logger.error(f"Error processing message: {str(e)}")
         return {
-            "response": f"Error: {str(e)}",
+            "response": f"I apologize, but I encountered an error. Could you please try again with more specific details?",
             "display_quotation": False,
             "quotation": None
         }
@@ -1608,11 +2210,12 @@ def reset_service_context(context):
 
 def refresh_data():
     """Refresh the data cache"""
-    global _df_cache, _data_analysis_cache, _conversation_context, _entity_extraction_llm
+    global _df_cache, _data_analysis_cache, _conversation_context, _entity_extraction_llm, _search_llm
     _df_cache = None
     _data_analysis_cache = None
     _conversation_context = {}
     _entity_extraction_llm = None
+    _search_llm = None
     get_quotation_data()  # This will refresh the data cache
     analyze_data()  # This will refresh the data analysis
     return "Data cache and analysis refreshed"
@@ -1648,3 +2251,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+                        
