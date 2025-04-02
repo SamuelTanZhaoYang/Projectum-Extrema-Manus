@@ -122,7 +122,7 @@ quotation-chatbot/
 3. Install Python dependencies (optional):
     ```bash
     cd backend
-    pip install -r requirements.txt
+    pip install fastapi uvicorn langchain-google-genai google-cloud-sql pandas pg8000 sqlalchemy python-dotenv fuzzywuzzy reportlab
     ```
 
 4. Create a .env file in the backend directory with:
@@ -152,8 +152,11 @@ quotation-chatbot/
     # or
     yarn install
     ```
-
-3. Configure environment variables:
+3. Install the Frontend Dependencies
+   ```bash
+   npm install vue@^3.3.4 vue-router@^4.2.5 vuex@^4.1.0 axios@^1.8.4 jspdf@^3.0.1 jspdf-autotable@^5.0.2 mitt@^3.0.1
+   ```
+4. Configure environment variables:
 
    Create a `.env` file in the frontend directory with:
 
