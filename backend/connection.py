@@ -56,7 +56,7 @@ def connect_with_connector() -> sqlalchemy.engine.base.Engine:
     pool = sqlalchemy.create_engine(
         "postgresql+pg8000://",
         creator=getconn,
-        # ...
+        
     )
     return pool
 
@@ -69,22 +69,27 @@ def get_quotation_data_as_df():
         or None if an error occurs
     """
     try:
+        # Create the connection pool
         pool = connect_with_connector()
-
+        print("Database connection pool created successfully")
+        
         with pool.connect() as db_conn:
+            print("Connected successfully to database")
+            
             # Query database
             result = db_conn.execute(sqlalchemy.text("SELECT * FROM quotation_data")).fetchall()
-
+            print(f"Query executed successfully, retrieved {len(result)} rows")
+            
             # Get column names from the result
             column_names = result[0]._fields if result else []
-
+            
             # Convert to pandas DataFrame
             df = pd.DataFrame(result, columns=column_names)
-
+            print(f"DataFrame created successfully with shape: {df.shape}")
+            
         return df
     except Exception as e:
         print(f"Error retrieving quotation data: {e}")
-
         return None
-
+    
 print(os.environ.get("DB_USER"))
