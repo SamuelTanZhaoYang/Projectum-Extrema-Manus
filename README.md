@@ -119,7 +119,7 @@ quotation-chatbot/
     source venv/bin/activate  # On Windows: venv\Scripts\activate
     ```
 
-3. Install Python dependencies:
+3. Install Python dependencies (optional):
     ```bash
     cd backend
     pip install -r requirements.txt
